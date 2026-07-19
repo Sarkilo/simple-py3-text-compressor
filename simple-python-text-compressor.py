@@ -1,132 +1,200 @@
+"""
+Text compressor/decompressor with tiered alphabet.
+
+Tier 0 (5-bit code, values 0-31):
+    0-25  -> lowercase letters a-z
+    26    -> space
+    27    -> '.'
+    28    -> ','
+    29    -> '\n'
+    30    -> ESCAPE_1B  -> go to Tier 1b (symbols)
+    31    -> ESCAPE_1A  -> go to Tier 1a (uppercase)
+
+Tier 1a (next 5-bit code, read right after an ESCAPE_1A):
+    0-25  -> uppercase letters A-Z
+
+Tier 1b (next 5-bit code, read right after an ESCAPE_1B):
+    0-27  -> symbol from SYMBOLS_TIER1B, in order:
+             '  *  "  !  ?  ;  :  @  #  $  %  ^  &  (  )  -  _  =  +  {  }  [  ]  /  \\  <  >  |
+
+Packing:
+    5-bit codes are packed tightly into full 8-bit bytes (not restricted to the
+    printable ASCII range anymore). Since lcm(5, 8) = 40, every 8 Tier-0-only
+    characters (no escapes needed) pack into exactly 5 bytes.
+
+Header:
+    The compressed payload is prefixed with a 4-byte big-endian character count.
+    This is what lets decompress() know exactly how many characters to emit,
+    so leftover zero-padding bits at the end of the last byte are never
+    mistaken for a real code (they're simply never read).
+"""
+
+import struct
+
+SPACE = 26
+DOT = 27
+COMMA = 28
+NEWLINE = 29
+ESCAPE_1B = 30  # escape into Tier 1b (symbols)
+ESCAPE_1A = 31  # escape into Tier 1a (uppercase)
+
+SYMBOLS_TIER1B = [
+    '\'', '*', '"', '!', '?', ';', ':',
+    '@', '#', '$', '%', '^', '&', '(', ')', '-', '_',
+    '=', '+', '{', '}', '[', ']', '/', '\\', '<', '>', '|',
+]
+SYMBOL_TO_CODE = {s: i for i, s in enumerate(SYMBOLS_TIER1B)}
+
+
+def char_to_codes(char):
+    """Return the list of 5-bit codes (each 0-31) that represent `char`."""
+    if char.islower():
+        return [ord(char) - ord('a')]
+    if char == ' ':
+        return [SPACE]
+    if char == '.':
+        return [DOT]
+    if char == ',':
+        return [COMMA]
+    if char == '\n':
+        return [NEWLINE]
+    if char.isupper():
+        return [ESCAPE_1A, ord(char) - ord('A')]
+    if char in SYMBOL_TO_CODE:
+        return [ESCAPE_1B, SYMBOL_TO_CODE[char]]
+    raise ValueError(f"Bro this {char!r} is not compressable")
+
+
+class BitWriter:
+    """Packs values of arbitrary bit-width into full bytes, LSB-first."""
+
+    def __init__(self):
+        self.buffer = bytearray()
+        self.acc = 0
+        self.bits = 0
+
+    def write(self, value, width):
+        self.acc |= (value & ((1 << width) - 1)) << self.bits
+        self.bits += width
+        while self.bits >= 8:
+            self.buffer.append(self.acc & 0xFF)
+            self.acc >>= 8
+            self.bits -= 8
+
+    def flush(self):
+        # Pad any leftover bits with zeros to complete the final byte.
+        if self.bits > 0:
+            self.buffer.append(self.acc & 0xFF)
+            self.acc = 0
+            self.bits = 0
+        return bytes(self.buffer)
+
+
+class BitReader:
+    """Reads values of arbitrary bit-width from bytes, LSB-first."""
+
+    def __init__(self, data):
+        self.data = data
+        self.pos = 0
+        self.acc = 0
+        self.bits = 0
+
+    def read(self, width):
+        while self.bits < width:
+            if self.pos >= len(self.data):
+                raise EOFError("Not enough bits left to read - corrupted data?")
+            self.acc |= self.data[self.pos] << self.bits
+            self.bits += 8
+            self.pos += 1
+        value = self.acc & ((1 << width) - 1)
+        self.acc >>= width
+        self.bits -= width
+        return value
+
+
 def compress(text):
-    compressed = []
-    current_byte = 0
-    bit_count = 0
-
+    """Compress `text` into bytes. Returns a 4-byte length header + payload."""
+    writer = BitWriter()
+    count = 0
     for char in text:
-        if (char.islower()):
-            char_value = ord(char) - ord('a')  # Map 'a' to 0, 'b' to 1, ..., 'z' to 25
-            
-            current_byte |= char_value << bit_count
-            bit_count += 5
+        for code in char_to_codes(char):
+            writer.write(code, 5)
+        count += 1
+    payload = writer.flush()
+    header = struct.pack('>I', count)  # original character count
+    return header + payload
 
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
-        elif (char == ' '):
-            char_value = 26
-		  
-            current_byte |= char_value << bit_count
-            bit_count += 5
-		  
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
-        elif (char == '.'):
-            char_value = 27
-		  
-            current_byte |= char_value << bit_count
-            bit_count += 5
-		  
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
-        elif (char == ','):
-            char_value = 28
-		  
-            current_byte |= char_value << bit_count
-            bit_count += 5
-		  
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
-        elif (char == '\''):
-            char_value = 29
-		  
-            current_byte |= char_value << bit_count
-            bit_count += 5
-		  
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
-        elif (char == '\n'):
-            char_value = 30
-		  
-            current_byte |= char_value << bit_count
-            bit_count += 5
-		  
-            if (bit_count >= 6):
-                compressed.append(chr(current_byte + 0x20))  # Convert to printable ASCII (0x20 to 0x7E)
-                bit_count -= 6
-                current_byte >>= 6
+
+def decompress(data):
+    """Decompress bytes produced by compress() back into the original text."""
+    (count,) = struct.unpack('>I', data[:4])
+    reader = BitReader(data[4:])
+    output = []
+    for _ in range(count):
+        v = reader.read(5)
+        if v == ESCAPE_1B:
+            v2 = reader.read(5)
+            output.append(SYMBOLS_TIER1B[v2])
+        elif v == ESCAPE_1A:
+            v2 = reader.read(5)
+            output.append(chr(v2 + ord('A')))
+        elif v <= 25:
+            output.append(chr(v + ord('a')))
+        elif v == SPACE:
+            output.append(' ')
+        elif v == DOT:
+            output.append('.')
+        elif v == COMMA:
+            output.append(',')
+        elif v == NEWLINE:
+            output.append('\n')
         else:
-            print(f"\nBro this {char} is not compressable \n")
-            exit()
-                
-    if (bit_count > 0):
-        compressed.append(chr(current_byte + 0x20))
+            raise ValueError(f"Unknown Tier 0 code: {v}")
+    return ''.join(output)
 
-    return ''.join(compressed)
 
-def decompress(compressed_text):
-    decompressed = []
-    current_value = 0
-    bit_count = 0
-
-    for char in compressed_text:
-        char_value = ord(char) - 0x20  # Convert back to original value (0x20 to 0x7E)
-        current_value |= (char_value & 0x3F) << bit_count  # Use 6 bits (0x3F = 0b111111)
-        bit_count += 6
-
-        while (bit_count >= 5):
-            letter_value = current_value & 0x1F  # Extract the lower 5 bits
-            if (letter_value <= 25):
-                decompressed.append(chr(letter_value + ord('a')))  # Map back to lowercase letter
+if __name__ == "__main__":
+    mode = input("Do you want cli or file? [c/f]: ")
+    if mode == 'f':
+        directory = input("Give me the direction of file you want to compress or decompress: ")
+        action = input("Do you want to compress or decompress? [c/d]: ")
+        if action == 'c':
+            with open(directory, "r", encoding="utf-8") as fileread:
+                text = fileread.read()
+            compressed = compress(text)
+            with open(directory + "_compressed", "wb") as filesave:
+                filesave.write(compressed)
+            print(f"Wrote {len(compressed)} bytes to {directory}_compressed")
+        else:
+            with open(directory, "rb") as fileread:
+                data = fileread.read()
+            decompressed = decompress(data)
+            with open(directory + "_decompressed", "w", encoding="utf-8") as filesave:
+                filesave.write(decompressed)
+            print(f"Wrote {len(decompressed)} chars to {directory}_decompressed")
+    else:
+        while True:
+            action = input("Compress or decompress (or q to quit)? [c/d/q]: ").strip().lower()
+            if action == 'q':
+                break
+            elif action == 'c':
+                text = input("Give me the text you want to compress: ")
+                try:
+                    compressed_bytes = compress(text)
+                except ValueError as e:
+                    print(e)
+                    continue
+                print("Compressed (hex):", compressed_bytes.hex())
+                print(f"Original chars: {len(text)}  Compressed bytes: {len(compressed_bytes)}")
+            elif action == 'd':
+                hex_text = input("Give me the compressed hex value you want to decompress: ").strip()
+                try:
+                    data = bytes.fromhex(hex_text)
+                    decompressed_text = decompress(data)
+                except (ValueError, EOFError) as e:
+                    print(f"Couldn't decompress that: {e}")
+                    continue
+                print("Decompressed:", decompressed_text)
             else:
-                if (letter_value == 26):
-                    decompressed.append(' ')
-                elif (letter_value == 27):
-                    decompressed.append('.')
-                elif (letter_value == 28):
-                    decompressed.append(',')
-                elif (letter_value == 29):
-                    decompressed.append('\'')
-                elif (letter_value == 30):
-                    decompressed.append('\n')
-            bit_count -= 5
-            current_value >>= 5
-
-    return ''.join(decompressed)
-
-if (input("Do you want cli or file? [c/f]: ") == 'f'):
-    directory = input("Give me the direction of file you want to compress or decompress: ")
-    with open(directory, "r") as fileread:
-        if (input("Do you want to compress or decompress? [c/d]: ") == 'c'):
-            with open(directory + "_compressed", "w") as filesave:
-                while (True):
-                    line = fileread.read()
-                    if (line != ''):
-                        filesave.write(compress(line))
-                    else:
-                        exit()
-        else:
-            with open(directory + "_decompressed", "w") as filesave:
-                while (True):
-                    line = fileread.read()
-                    if (line != ''):
-                        filesave.write(decompress(line))
-                    else:
-                        exit()
-
-else:
-    text = input("Give me the text you want to compress: ")
-    compressed_text = compress(text)
-    print("Compressed:", compressed_text)
-
-    decompressed_text = decompress(compressed_text)
-    print("Decompressed:", decompressed_text)
+                print("Please enter 'c', 'd', or 'q'.")
+				
