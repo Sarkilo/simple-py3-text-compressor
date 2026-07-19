@@ -7,15 +7,17 @@ Tier 0 (5-bit code, values 0-31):
     27    -> '.'
     28    -> ','
     29    -> '\n'
-    30    -> ESCAPE_1B  -> go to Tier 1b (symbols)
-    31    -> ESCAPE_1A  -> go to Tier 1a (uppercase)
+    30    -> ESCAPE_1B  -> go to Tier 1b (symbols / digits 6-9)
+    31    -> ESCAPE_1A  -> go to Tier 1a (uppercase / digits 0-5)
 
 Tier 1a (next 5-bit code, read right after an ESCAPE_1A):
     0-25  -> uppercase letters A-Z
+    26-31 -> digits '0'-'5'   (free space in this tier, now used for digits)
 
 Tier 1b (next 5-bit code, read right after an ESCAPE_1B):
     0-27  -> symbol from SYMBOLS_TIER1B, in order:
              '  *  "  !  ?  ;  :  @  #  $  %  ^  &  (  )  -  _  =  +  {  }  [  ]  /  \\  <  >  |
+    28-31 -> digits '6'-'9'   (free space in this tier, now used for digits)
 
 Packing:
     5-bit codes are packed tightly into full 8-bit bytes (not restricted to the
@@ -35,8 +37,8 @@ SPACE = 26
 DOT = 27
 COMMA = 28
 NEWLINE = 29
-ESCAPE_1B = 30  # escape into Tier 1b (symbols)
-ESCAPE_1A = 31  # escape into Tier 1a (uppercase)
+ESCAPE_1B = 30  # escape into Tier 1b (symbols / digits 6-9)
+ESCAPE_1A = 31  # escape into Tier 1a (uppercase / digits 0-5)
 
 SYMBOLS_TIER1B = [
     '\'', '*', '"', '!', '?', ';', ':',
@@ -44,6 +46,14 @@ SYMBOLS_TIER1B = [
     '=', '+', '{', '}', '[', ']', '/', '\\', '<', '>', '|',
 ]
 SYMBOL_TO_CODE = {s: i for i, s in enumerate(SYMBOLS_TIER1B)}
+
+# Digits are split across the two escape tiers' leftover codes.
+# Tier 1a has 6 free codes (26-31) after the 26 letters -> digits 0-5.
+# Tier 1b has 4 free codes (28-31) after the 28 symbols  -> digits 6-9.
+TIER1A_DIGIT_BASE = 26   # digit d (0-5) -> code 26 + d
+TIER1A_DIGIT_COUNT = 6
+TIER1B_DIGIT_BASE = 28   # digit d (6-9) -> code 28 + (d - 6)
+TIER1B_DIGIT_COUNT = 4
 
 
 def char_to_codes(char):
@@ -62,6 +72,11 @@ def char_to_codes(char):
         return [ESCAPE_1A, ord(char) - ord('A')]
     if char in SYMBOL_TO_CODE:
         return [ESCAPE_1B, SYMBOL_TO_CODE[char]]
+    if char.isdigit():
+        d = int(char)
+        if d < TIER1A_DIGIT_COUNT:
+            return [ESCAPE_1A, TIER1A_DIGIT_BASE + d]
+        return [ESCAPE_1B, TIER1B_DIGIT_BASE + (d - TIER1A_DIGIT_COUNT)]
     raise ValueError(f"Bro this {char!r} is not compressable")
 
 
@@ -134,10 +149,18 @@ def decompress(data):
         v = reader.read(5)
         if v == ESCAPE_1B:
             v2 = reader.read(5)
-            output.append(SYMBOLS_TIER1B[v2])
+            if v2 >= TIER1B_DIGIT_BASE:
+                digit = TIER1A_DIGIT_COUNT + (v2 - TIER1B_DIGIT_BASE)
+                output.append(str(digit))
+            else:
+                output.append(SYMBOLS_TIER1B[v2])
         elif v == ESCAPE_1A:
             v2 = reader.read(5)
-            output.append(chr(v2 + ord('A')))
+            if v2 >= TIER1A_DIGIT_BASE:
+                digit = v2 - TIER1A_DIGIT_BASE
+                output.append(str(digit))
+            else:
+                output.append(chr(v2 + ord('A')))
         elif v <= 25:
             output.append(chr(v + ord('a')))
         elif v == SPACE:
@@ -197,4 +220,3 @@ if __name__ == "__main__":
                 print("Decompressed:", decompressed_text)
             else:
                 print("Please enter 'c', 'd', or 'q'.")
-				
