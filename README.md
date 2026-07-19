@@ -1,7 +1,7 @@
 # simple-py3-text-compressor
-This simple Python program can compress only English alphabet (upper and lower case) and most special symbols (10 codes are available for use as needed, with the possibility to add tiers past 1, which increases the capacity to an infinite number of characters; however each additional tier decreases compression efficiency, which can easily go negative).<br>
-It works by changing letters, symbols, and tiers into 5-bit codes, which then get written to the file as raw binary data. The CLI mode uses hex for easier demonstration due to the nature of some ASCII characters. <br>  
-Every 5 compressed characters contain 8 characters uncompressed (when using only lowercase letters, space, colon, period, and newline, which is the most efficient for compression).<br>
+This simple Python program can olny compress the English alphabet (upper and lower case), most special symbols, space, newline, and digits (it is possible to exchange codes as needed, with the possibility to add tiers past 1, which increases the capacity to an infinite number of characters; however each additional tier decreases compression efficiency, which can easily go negative).<br>
+It works by changing letters, symbols, and tiers into 5-bit codes, which then are written to the file as raw binary data. The CLI mode uses hex for easier demonstration due to the nature of some ASCII characters. <br>  
+Every 5 compressed characters represent 8 uncompressed characters (when using only lowercase letters, space, colon, period, and newline, which is the most efficient for compression).<br>
 You can use the CLI (with hex) or input a file.<br>
 # Examples
 Here's an example sentence.<br>
